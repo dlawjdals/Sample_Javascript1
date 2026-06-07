@@ -1,1 +1,105 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: git_action_js
+
+jobs:
+  # ===============================================
+  # JOB 1: build — 코드 문법 검사 (Lint / Syntax Check)
+  # ===============================================
+  build:
+    name: Build (Syntax Check)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'        # LTS 버전 (프로젝트에 맞게 조정)
+          cache: 'npm'              # npm 의존성 캐시로 속도 향상
+
+      - name: Install dependencies
+        run: npm ci                 # package-lock.json 기반 정확한 설치
+
+      - name: Syntax check
+        # 모든 .js 파일을 node --check 로 문법 검사
+        run: |
+          find . -path ./node_modules -prune -o -name "*.js" -print \
+            | xargs -I {} node --check {}
+
+      - name: Lint with ESLint
+        # eslint 설정이 있으면 실행, 없으면 건너뜀
+        run: npm run lint --if-present
+
+  # ===============================================
+  # JOB 2: test — 코드 테스트
+  # ===============================================
+  test:
+    name: Test
+    needs: build              # build(문법 검사) 성공해야 실행
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+  # ===============================================
+  # JOB 3: publish — Docker 이미지 빌드 & 업로드
+  # ===============================================
+  publish:
+    name: Build & Push Docker image
+    needs: test               # test(코드 테스트) 성공해야 실행
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ secrets.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-,format=short
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
